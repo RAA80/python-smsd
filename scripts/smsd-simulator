@@ -1,0 +1,140 @@
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
+
+import argparse
+import threading
+import re
+import time
+from serial import Serial
+
+from smsd.device import SMSD42
+
+
+class SimSMSD():
+    def __init__(self, port, unit):
+        self.unit = unit
+
+        self.state = {"speed": 0,
+                      "direction": 0,
+                      "position": 0,
+                      "steps": 0,
+                      "enable": 0,
+                      "accelerate": 0,
+                      "edge": "",
+                      "command": "",
+                     }
+        self.drv = None
+
+        try:
+            self.port = Serial(port=port, parity="E")
+        except Exception as err:
+            print (err)
+            exit(0)
+
+        self.drv = Driver(self.state)
+        self.drv.daemon = True
+        self.drv.start()
+
+        self.start()
+
+    def __del__(self):
+        if self.drv:
+            self.drv.stop()
+            self.drv.join()
+
+    def start(self):
+        while True:
+            self.read()
+
+    def read(self):
+        ch = b""
+        message = b""
+
+        while ch != b"*":
+            ch = self.port.read()
+            self.write(ch)
+            message += ch
+        else:
+            result = re.match("^([A-Z]+)?(\d+)*", message.decode("ascii"))
+            cmd = result.group(1)
+            try:
+                value = int(result.group(2))
+            except TypeError:
+                value = None
+
+            if cmd not in SMSD42.keys():
+                self.write(b"E16*")
+            elif value is not None and value not in range(SMSD42[cmd]['min'], SMSD42[cmd]['max']):
+                self.write(b"E19*")
+            else:
+                self.write(b"E10*")
+
+                if cmd in ('LD', 'RD', 'ST', 'LB', 'RB', 'SB', 'ED', 'EM',
+                           'BG', 'RS', 'SF', 'CF', 'LL', 'JP', 'WL', 'WH'):
+                    print ("Command '{}' not implemented. Maybe later".format(cmd))
+                elif cmd == 'DL': self.state["direction"] = 0
+                elif cmd == 'DR': self.state["direction"] = 1
+                elif cmd == 'EN': self.state["enable"] = 1
+                elif cmd == 'DS': self.state["enable"] = 0
+                elif cmd == 'AL': self.state["accelerate"] = value
+                elif cmd == 'SD': self.state["speed"] = value
+                elif cmd == 'MV': self.state["steps"] = value or 0
+                self.state["command"] = cmd
+
+    def write(self, data):
+        self.port.write(data)
+
+
+class Driver(threading.Thread):
+    def __init__(self, state):
+        threading.Thread.__init__(self)
+
+        self._state = state
+        self.flag = False
+
+    def run(self):
+        while not self.flag:
+            if self._state["enable"]:
+                if self._state["speed"] > 0 and self._state["command"] in ("MV", "MH", "ML", "HM"):
+                    if self._state["direction"]:
+                        self._state["position"] += self._state["speed"]
+                    else:
+                        self._state["position"] -= self._state["speed"]
+
+            if self._state["position"] >= 10000:
+                self._state["position"] = 10000
+                self._state['edge'] = "IN1"
+            elif self._state["position"] <= -10000:
+                self._state["position"] = -10000
+                self._state['edge'] = "IN2"
+            elif self._state["position"] == 0:
+                self._state['edge'] = "HOME"
+            else:
+                self._state['edge'] = ""
+
+            print ("enable: {}, speed: {:5d}, position: {:8d}, "
+                   "direction: {}, steps: {:8d}, accelerate: {:5d}, edge: {:4s}".
+                    format(self._state["enable"], self._state["speed"],
+                           self._state["position"], self._state["direction"],
+                           self._state["steps"], self._state["accelerate"],
+                           self._state["edge"]), end='\r')
+            time.sleep(1.0)
+
+    def stop(self):
+        self.flag = True
+
+
+def Process(args):
+    SimSMSD(port=args.port, unit=args.unit)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='SMSD simulator command-line option')
+    parser.add_argument('--port', type=str, nargs='?', const='COM1', required=True, help='Set used port name')
+    parser.add_argument('--unit', type=int, nargs='?', const=1, required=True, help='Set used SMSD address')
+    parser.set_defaults(func=Process)
+
+    args = parser.parse_args()
+    args.func(args)

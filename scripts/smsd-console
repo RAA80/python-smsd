@@ -1,0 +1,71 @@
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import logging
+import argparse
+from serial import Serial
+
+from smsd.client import Client
+from smsd.device import SMSD42
+
+_param_keys = sorted(SMSD42.keys())
+
+
+def Process(args):
+    _timeout = args.timeout if args.timeout is not None else 0.1
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+
+    transport = Serial(port=args.port, parity='E', timeout=_timeout)
+    id_smsd = Client(transport=transport, device=SMSD42, unit=args.unit)
+
+    if args.set:
+        try:
+            name = args.set[0]
+        except:
+            name = None
+
+        try:
+            value = int(args.set[1])
+        except:
+            value = None
+
+        print (id_smsd.setParam(name, value))
+    elif args.move:
+        try:
+            speed = int(args.move[0])
+        except:
+            speed = None
+
+        try:
+            steps = int(args.move[1])
+        except:
+            steps = None
+
+        try:
+            edge = args.move[2]
+        except:
+            edge = None
+
+        print (id_smsd.move(speed, steps, edge))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='SMSD command-line option')
+
+    parser.add_argument('--port', type=str, nargs='?', const='COM1', required=True, help='Set used port name')
+    parser.add_argument('--timeout', type=float, nargs='?', metavar=('VALUE'), const=0.1, help='Set used timeout in second')
+    parser.add_argument('--debug', action='store_true', help='Print debug information')
+
+    group2 = parser.add_argument_group('User')
+    group2.add_argument('--unit', type=int, nargs='?', const=5, help='Set used SMSD address')
+
+    group2_ex = group2.add_mutually_exclusive_group()
+    group2_ex.add_argument('--set', type=str, nargs="*", metavar=('KEY', 'VALUE'),
+                                    help='Write config value. Possible KEY values: ' + str(_param_keys))
+    group2_ex.add_argument('--move', type=str, nargs="*", metavar=('ARG'), help='Send move command with args: Speed, Steps, Edge')
+
+    parser.set_defaults(func=Process)
+
+    args = parser.parse_args()
+    args.func(args)
